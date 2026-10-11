@@ -51,6 +51,7 @@ import com.nudge.app.data.RideStatus
 import com.nudge.app.data.Role
 import com.nudge.app.data.RouteInfo
 import com.nudge.app.data.RouteShape
+import com.nudge.app.data.withHeading
 import com.nudge.app.data.Stop
 import com.nudge.app.data.TripLocationService
 import com.nudge.app.data.User
@@ -235,11 +236,7 @@ fun NudgeApp(devStart: String? = null, vm: NudgeViewModel = viewModel()) {
         }
         is Route.Playback -> {
           val track by produceState(emptyList<Position>(), route.tripId) { value = route.tripId?.let { vm.track(it) }.orEmpty() }
-          val stops = state.routes.firstOrNull { it.id == route.routeId }?.stops(route.evening).orEmpty()
-          val shape by produceState<RouteShape?>(null, route.routeId, stops) {
-            value = route.routeId?.let { vm.routeShape(it, route.evening) }?.takeIf { it.fits(stops) }
-          }
-          RoutePlaybackScreen(route.shuttleCode, route.routeName, "Today", track, stops, shape?.coords, onBack = { nav.pop() })
+          RoutePlaybackScreen(route.shuttleCode, route.routeName, "Today", track, onBack = { nav.pop() })
         }
         Route.AdminUpi -> UpiAccountsScreen(state.catalog.upi, vm::saveUpi, vm::deleteUpi, vm::setPrimaryUpi, onBack = { nav.pop() })
         Route.AdminPlans -> PlansAdminScreen(state.catalog.plans, vm::savePlan, onBack = { nav.pop() })
@@ -371,7 +368,7 @@ private fun TrackingRoute(vm: NudgeViewModel, ride: Ride, onBack: () -> Unit) {
   LiveTrackingScreen(
     ui, onBack = onBack, onHelp = { help = true },
     onCall = { ctx.contact(route?.driverPhone, "call") }, onMessage = { ctx.contact(route?.driverPhone, "sms") },
-    map = { LiveMap(stops, it, trail = trail, vehicles = listOfNotNull(p), follow = p != null, highlight = pickup, road = shape?.coords) },
+    map = { LiveMap(it, vehicles = listOfNotNull(trail.withHeading()), follow = p != null, highlight = pickup) },
   )
 }
 
@@ -646,7 +643,7 @@ private fun AdminRoot(vm: NudgeViewModel, nav: Navigator) {
         when (t) {
           0 -> Refreshable(vm) {
             AdminFleetScreen(state.fleet.first, state.fleet.second, onVehicle = { v ->
-              nav.push(Route.Playback(v.code, v.description, v.tripId, v.routeId, v.evening))
+              nav.push(Route.Playback(v.code, v.description, v.tripId))
             })
           }
           1 -> AdminRoutesScreen(
@@ -712,6 +709,6 @@ private suspend fun devJump(name: String, vm: NudgeViewModel, nav: Navigator) {
         else -> vm.state.value.catalog.routes.first().let { vm.editRoute(it); Route.RouteEditor(it.id) }
       })
     }
-    "playback" -> if (login("7000000002")) nav.push(Route.Playback("SH-1", "Route 1", null, vm.state.value.routes.firstOrNull()?.id, false))
+    "playback" -> if (login("7000000002")) nav.push(Route.Playback("SH-1", "Route 1", null))
   }
 }

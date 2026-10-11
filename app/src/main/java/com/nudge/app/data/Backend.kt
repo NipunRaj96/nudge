@@ -276,7 +276,7 @@ class Backend(url: String, key: String, private val prefs: android.content.Share
       val pos = t?.takeIf { it.status == "live" }?.let { live ->
         db.from("positions").select { filter { eq("trip_id", live.id) }; order("recorded_at", Order.DESCENDING); limit(1) }.decodeList<PositionRow>().firstOrNull()?.toPosition()
       }
-      Vehicle(v.code, t?.route?.name ?: "No trip today", state, chip, t?.id, pos, t?.routeId, t?.shift == "evening")
+      Vehicle(v.code, t?.route?.name ?: "No trip today", state, chip, t?.id, pos)
     }
     FleetStats(trips.count { it.status == "live" }, trips.sumOf { it.bookings.firstOrNull()?.count ?: 0 }, vehicles.count { it.active }, vehicles.size) to list
   }
@@ -592,8 +592,9 @@ private fun String.toBoarding() = when (this) { "boarded" -> BoardingStatus.Boar
 
 @Serializable private data class PositionRow(
   val lat: Double, val lng: Double, @SerialName("speed_kmh") val speedKmh: Float? = null, @SerialName("recorded_at") val recordedAt: String,
+  val heading: Float? = null,
 ) {
-  fun toPosition() = Position(lat, lng, speedKmh, Instant.parse(recordedAt).toEpochMilli())
+  fun toPosition() = Position(lat, lng, speedKmh, Instant.parse(recordedAt).toEpochMilli(), heading)
 }
 
 @Serializable private data class TitleRow(val title: String)

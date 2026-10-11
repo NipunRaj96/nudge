@@ -16,7 +16,7 @@ sealed interface Route {
   data object Pay : Route
   data class BoardingPass(val rideId: String) : Route
   data class Tracking(val rideId: String) : Route
-  data class Playback(val shuttleCode: String, val routeName: String, val tripId: String?, val routeId: String?, val evening: Boolean) : Route
+  data class Playback(val shuttleCode: String, val routeName: String, val tripId: String?) : Route
   // Operator management
   data object AdminUpi : Route
   data object AdminPlans : Route

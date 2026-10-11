@@ -97,7 +97,6 @@ data class DriverTrip(
 enum class VehicleState { OnRoute, Delayed, Standby }
 data class Vehicle(
   val code: String, val description: String, val state: VehicleState, val chip: String, val tripId: String? = null, val position: Position? = null,
-  val routeId: String? = null, val evening: Boolean = false,
 )
 
 /** A shuttle as the operator edits it. */
@@ -106,7 +105,8 @@ data class Shuttle(val id: String, val code: String, val seats: Int, val active:
 /** [id] is the profile id once they have logged in (needed to assign a driver to a route). */
 data class StaffMember(val id: String?, val phone: String, val name: String, val role: Role, val joined: Boolean)
 
-data class Position(val lat: Double, val lng: Double, val speedKmh: Float?, val atMillis: Long)
+/** [heading] = direction of travel in degrees from north (GPS bearing), when known. */
+data class Position(val lat: Double, val lng: Double, val speedKmh: Float?, val atMillis: Long, val heading: Float? = null)
 
 data class FleetStats(val activeTrips: Int, val bookingsToday: Int, val fleetUp: Int, val fleetTotal: Int)
 
@@ -119,6 +119,21 @@ fun minutesBetween(a: String?, b: String?): Int =
 
 /** "+91 98765 43210" for display; tel: links use the raw digits. */
 fun prettyPhone(p: String) = p.takeLast(10).let { if (it.length == 10) "+91 ${it.take(5)} ${it.drop(5)}" else p }
+
+/** Compass bearing in degrees (0 = north) from [a] to [b]; null when they are the same point. */
+fun bearingDeg(a: Position, b: Position): Float? {
+  if (a.lat == b.lat && a.lng == b.lng) return null
+  val la1 = Math.toRadians(a.lat); val la2 = Math.toRadians(b.lat); val dLng = Math.toRadians(b.lng - a.lng)
+  val y = Math.sin(dLng) * Math.cos(la2)
+  val x = Math.cos(la1) * Math.sin(la2) - Math.sin(la1) * Math.cos(la2) * Math.cos(dLng)
+  return ((Math.toDegrees(Math.atan2(y, x)) + 360) % 360).toFloat()
+}
+
+/** Last position with a heading: the GPS bearing, else the direction from the previous point. */
+fun List<Position>.withHeading(): Position? = lastOrNull()?.let { p ->
+  p.heading?.let { return p }
+  p.copy(heading = asReversed().drop(1).firstNotNullOfOrNull { bearingDeg(it, p) })
+}
 
 /** Great-circle distance in km. */
 fun distanceKm(lat1: Double, lng1: Double, lat2: Double, lng2: Double): Double {

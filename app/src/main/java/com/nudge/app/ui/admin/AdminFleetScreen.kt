@@ -79,7 +79,7 @@ fun AdminFleetScreen(stats: FleetStats, vehicles: List<Vehicle>, onVehicle: (Veh
           }
         }
         BoxWithConstraints(Modifier.fillMaxWidth().height(220.dp).clip(Radius32).hairline(Color.White.copy(alpha = 0.1f), Radius32)) {
-          LiveMap(emptyList(), Modifier.fillMaxSize(), vehicles = vehicles.mapNotNull { it.position }, topInsetDp = 40, interactive = false)
+          LiveMap(Modifier.fillMaxSize(), vehicles = vehicles.mapNotNull { it.position }, topInsetDp = 40, interactive = false)
         }
       }
 

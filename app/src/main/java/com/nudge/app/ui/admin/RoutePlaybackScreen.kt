@@ -41,7 +41,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.nudge.app.ui.components.CircleIconButton
 import com.nudge.app.data.Position
-import com.nudge.app.data.Stop
+import com.nudge.app.data.withHeading
 import com.nudge.app.data.distanceKm
 import com.nudge.app.ui.components.LiveMap
 import com.nudge.app.ui.components.Symbol
@@ -56,7 +56,7 @@ import com.nudge.app.ui.theme.NudgeType
  * Operator replay of a trip from its recorded GPS points ([track], oldest first). Full replay takes 40 s at 1x.
  */
 @Composable
-fun RoutePlaybackScreen(shuttleCode: String, routeName: String, dateLabel: String, track: List<Position>, stops: List<Stop>, road: List<Pair<Double, Double>>?, onBack: () -> Unit, modifier: Modifier = Modifier) {
+fun RoutePlaybackScreen(shuttleCode: String, routeName: String, dateLabel: String, track: List<Position>, onBack: () -> Unit, modifier: Modifier = Modifier) {
   var progress by remember { mutableFloatStateOf(0f) }
   var playing by remember { mutableStateOf(false) }
   var speed by remember { mutableStateOf(1) }
@@ -81,7 +81,7 @@ fun RoutePlaybackScreen(shuttleCode: String, routeName: String, dateLabel: Strin
   fun fmt(ms: Long) = if (!hasTrack) "--:--" else java.time.Instant.ofEpochMilli(ms).atZone(java.time.ZoneId.of("Asia/Kolkata")).format(clock)
 
   Box(modifier.fillMaxSize().background(Color.Black)) {
-    LiveMap(stops, Modifier.fillMaxSize(), trail = shown, vehicles = listOfNotNull(shown.lastOrNull()), topInsetDp = 100, road = road)
+    LiveMap(Modifier.fillMaxSize(), trail = shown, vehicles = listOfNotNull(shown.withHeading()), topInsetDp = 100)
     Row(
       Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.statusBars).padding(horizontal = 24.dp, vertical = 12.dp),
       horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically,

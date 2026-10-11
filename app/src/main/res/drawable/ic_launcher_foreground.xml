@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   Nudge mark: the "N" with a forward arrow, redrawn in its own 318 x 209 box
-  (N 212 x 200, arrow stroke matched closer to the N's weight) and scaled to fill the 66dp adaptive-icon safe zone,
-  centred as one group (the original sat right of centre because of the arrow).
+  (N 212 x 200, arrow stroke matched closer to the N's weight). Scaled so the whole mark (about 42 x 28dp) sits well
+  inside the 66dp safe circle, so round and squircle launcher masks never clip the arrow; centred as one group.
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
-    <group android:translateX="24" android:translateY="35.98" android:scaleX="0.1887" android:scaleY="0.1887">
+    <group android:translateX="33.1" android:translateY="40.8" android:scaleX="0.135" android:scaleY="0.135">
         <path android:fillColor="#F4F1E8" android:pathData="M0,200V0H32L180,152V0H212V200H180L32,48V200Z" />
         <path android:strokeColor="#F4F1E8" android:strokeWidth="18" android:strokeLineCap="butt"
             android:pathData="M234,26H296" />

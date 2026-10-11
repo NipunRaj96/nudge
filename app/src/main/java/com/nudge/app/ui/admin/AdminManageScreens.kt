@@ -592,7 +592,7 @@ fun MapPickerScreen(start: Stop, onPicked: (Double, Double) -> Unit, onBack: () 
   var lat by remember { mutableStateOf(start.lat) }
   var lng by remember { mutableStateOf(start.lng) }
   Box(Modifier.fillMaxSize().background(Color.Black)) {
-    LiveMap(emptyList(), Modifier.fillMaxSize(), center = Position(start.lat, start.lng, null, 0), onCenter = { a, b -> lat = a; lng = b }, topInsetDp = 100)
+    LiveMap(Modifier.fillMaxSize(), center = Position(start.lat, start.lng, null, 0), onCenter = { a, b -> lat = a; lng = b }, topInsetDp = 100)
     Box(Modifier.align(Alignment.Center).padding(bottom = 40.dp)) { Symbol("location_on", size = 48.dp, tint = NudgeColors.PrimaryContainer, filled = true) }
     ScreenHeader(start.name.ifBlank { "Pick location" }, Modifier.background(NudgeColors.Background.copy(alpha = 0.85f)), onBack = onBack)
     Column(
