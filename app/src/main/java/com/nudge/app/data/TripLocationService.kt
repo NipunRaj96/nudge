@@ -62,6 +62,8 @@ class TripLocationService : Service(), LocationListener {
 
   override fun onLocationChanged(l: Location) {
     val id = tripId ?: return
+    // Skip rough fixes (indoors, first seconds after start): they make the shuttle jump to the wrong street.
+    if (l.hasAccuracy() && l.accuracy > 60f) return
     // Safety net: a driver who never taps End trip doesn't share GPS all day.
     if (System.currentTimeMillis() - startedAt > 6 * 3600_000L) { stopSelf(); return }
     // ponytail: a point that fails to upload (no signal) is dropped; queue them if playback gaps matter.

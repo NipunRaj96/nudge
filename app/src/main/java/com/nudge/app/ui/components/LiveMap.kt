@@ -17,6 +17,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.nudge.app.data.Position
+import com.nudge.app.data.distanceKm
 import com.nudge.app.data.Stop
 import org.maplibre.android.MapLibre
 import org.maplibre.android.camera.CameraUpdateFactory
@@ -69,16 +70,22 @@ fun LiveMap(
   vehicles: List<Position> = emptyList(),
   follow: Boolean = false,
   topInsetDp: Int = 120,
+  /** Height covered at the bottom (sheet, buttons): framing keeps markers above it. */
+  bottomInsetDp: Int = topInsetDp * 3,
   interactive: Boolean = true,
   /** Start centred here (map picker); the camera centre is reported to [onCenter] whenever the map stops moving. */
   center: Position? = null,
   onCenter: ((Double, Double) -> Unit)? = null,
   /** The rider's own pickup stop. */
   highlight: Stop? = null,
+  /** The phone's own location ("you"). */
+  me: Position? = null,
 ) {
   val ctx = LocalContext.current
   val lifecycle = LocalLifecycleOwner.current.lifecycle
   val topPx = with(LocalDensity.current) { topInsetDp.dp.roundToPx() }
+  val bottomPx = with(LocalDensity.current) { bottomInsetDp.dp.roundToPx() }
+  val sidePx = with(LocalDensity.current) { 48.dp.roundToPx() }
   val mapView = remember {
     MapLibre.getInstance(ctx)
     // Texture mode so the map fades/slides with Compose screen transitions.
@@ -125,34 +132,38 @@ fun LiveMap(
     }
   }, modifier = modifier)
 
-  LaunchedEffect(style, trail, vehicles, highlight) {
+  LaunchedEffect(style, trail, vehicles, highlight, me) {
     val s = style ?: return@LaunchedEffect
     fun pt(lat: Double, lng: Double) = Point.fromLngLat(lng, lat)
     s.source("trail")?.setGeoJson(Feature.fromGeometry(LineString.fromLngLats(trail.map { pt(it.lat, it.lng) })))
     s.source("pickup")?.setGeoJson(FeatureCollection.fromFeatures(listOfNotNull(highlight).map { Feature.fromGeometry(pt(it.lat, it.lng)) }))
+    s.source("me")?.setGeoJson(FeatureCollection.fromFeatures(listOfNotNull(me).map { Feature.fromGeometry(pt(it.lat, it.lng)) }))
     s.source("vehicle")?.setGeoJson(FeatureCollection.fromFeatures(vehicles.map { v ->
       Feature.fromGeometry(pt(v.lat, v.lng)).apply { addNumberProperty("heading", v.heading ?: 0f) }
     }))
   }
 
   // Frame the pickup, shuttle and trail once (again when the pickup changes or the first fix arrives).
-  LaunchedEffect(map, highlight, vehicles.isEmpty(), trail.size > 1) {
+  LaunchedEffect(map, highlight, vehicles.isEmpty(), trail.size > 1, me == null) {
     val m = map ?: return@LaunchedEffect
-    val points = listOfNotNull(highlight).map { LatLng(it.lat, it.lng) } + (trail + vehicles).map { LatLng(it.lat, it.lng) }
+    val points = listOfNotNull(highlight).map { LatLng(it.lat, it.lng) } + (trail + vehicles + listOfNotNull(me)).map { LatLng(it.lat, it.lng) }
     when {
       center != null -> m.moveCamera(CameraUpdateFactory.newLatLngZoom(LatLng(center.lat, center.lng), 15.0))
-      points.size >= 2 -> m.moveCamera(CameraUpdateFactory.newLatLngBounds(LatLngBounds.Builder().includes(points).build(), topPx / 3, topPx, topPx / 3, topPx * 3))
+      points.size >= 2 -> m.moveCamera(CameraUpdateFactory.newLatLngBounds(LatLngBounds.Builder().includes(points).build(), sidePx, topPx, sidePx, bottomPx))
       points.size == 1 -> m.moveCamera(CameraUpdateFactory.newLatLngZoom(points[0], 14.0))
       else -> m.moveCamera(CameraUpdateFactory.newLatLngZoom(LatLng(28.57, 77.25), 10.0)) // Delhi NCR
     }
   }
-  LaunchedEffect(map, follow, vehicles.firstOrNull()) {
+  LaunchedEffect(map, follow, vehicles.firstOrNull(), me == null) {
     val m = map ?: return@LaunchedEffect
     val v = vehicles.firstOrNull() ?: return@LaunchedEffect
     if (!follow) return@LaunchedEffect
-    // Keep the rider's pickup in view next to the shuttle; with no pickup, just centre on the shuttle.
+    // Keep the rider's pickup (and the rider, when they're near it) in view next to the shuttle; with no pickup, just
+    // centre on the shuttle.
     val update = if (highlight != null) CameraUpdateFactory.newLatLngBounds(
-      LatLngBounds.Builder().include(LatLng(v.lat, v.lng)).include(LatLng(highlight.lat, highlight.lng)).build(), topPx / 2, topPx, topPx / 2, topPx * 3,
+      LatLngBounds.Builder().include(LatLng(v.lat, v.lng)).include(LatLng(highlight.lat, highlight.lng))
+        .apply { me?.takeIf { distanceKm(it.lat, it.lng, highlight.lat, highlight.lng) < 3 }?.let { include(LatLng(it.lat, it.lng)) } }.build(),
+      sidePx, topPx, sidePx, bottomPx,
     ) else CameraUpdateFactory.newLatLngZoom(LatLng(v.lat, v.lng), maxOf(m.cameraPosition.zoom, 12.5))
     m.animateCamera(update, 600)
   }
@@ -161,7 +172,7 @@ fun LiveMap(
 private fun Style.source(id: String) = getSourceAs<GeoJsonSource>(id)
 
 private fun addLayers(s: Style, density: Float) {
-  listOf("trail", "pickup", "vehicle").forEach { s.addSource(GeoJsonSource(it)) }
+  listOf("trail", "pickup", "me", "vehicle").forEach { s.addSource(GeoJsonSource(it)) }
   val primary = "#b8c3ff"
   s.addImage("shuttle", shuttleBitmap(density))
   s.addLayer(LineLayer("trail-line", "trail").withProperties(
@@ -169,6 +180,9 @@ private fun addLayers(s: Style, density: Float) {
   ))
   s.addLayer(CircleLayer("pickup-dot", "pickup").withProperties(
     circleRadius(8f), circleColor(primary), circleStrokeColor("#131313"), circleStrokeWidth(3f),
+  ))
+  s.addLayer(CircleLayer("me-dot", "me").withProperties( // "you": white-ringed light dot, distinct from the pickup pin
+    circleRadius(7f), circleColor("#4fc3f7"), circleStrokeColor("#ffffff"), circleStrokeWidth(2.5f),
   ))
   s.addLayer(SymbolLayer("vehicle-icon", "vehicle").withProperties(
     iconImage("shuttle"), iconRotate(get("heading")), iconRotationAlignment(Property.ICON_ROTATION_ALIGNMENT_MAP),

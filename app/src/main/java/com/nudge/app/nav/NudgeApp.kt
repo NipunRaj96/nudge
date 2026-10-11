@@ -1,5 +1,8 @@
 package com.nudge.app.nav
 
+import android.annotation.SuppressLint
+import androidx.compose.runtime.DisposableEffect
+
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -72,6 +75,8 @@ import com.nudge.app.ui.booking.DateOption
 import com.nudge.app.ui.components.AdminNav
 import com.nudge.app.ui.components.AppBottomNav
 import com.nudge.app.ui.components.ConfirmDialog
+import com.nudge.app.ui.components.locationProblem
+import com.nudge.app.ui.components.rememberLocationGate
 import com.nudge.app.ui.components.DriverNav
 import com.nudge.app.ui.components.GhostButton
 import com.nudge.app.ui.components.LiveMap
@@ -337,6 +342,11 @@ private fun TrackingRoute(vm: NudgeViewModel, ride: Ride, onBack: () -> Unit) {
     value = vm.routeShape(ride.routeId, ride.shift == "Evening")?.takeIf { it.fits(stops) }
   }
   var help by remember { mutableStateOf(false) }
+  // The rider's own position ("you" dot), once per screen visit; declining just leaves it off.
+  val locate = rememberLocationGate("Nudge shows where you are next to the shuttle.")
+  var watching by remember { mutableStateOf(false) }
+  LaunchedEffect(Unit) { locate { watching = true } }
+  val me = rememberMyLocation(watching)
   val trail by produceState(emptyList<Position>(), ride.tripId) {
     value = vm.track(ride.tripId)
     vm.live(ride.tripId).collect { value = value + it }
@@ -368,7 +378,7 @@ private fun TrackingRoute(vm: NudgeViewModel, ride: Ride, onBack: () -> Unit) {
   LiveTrackingScreen(
     ui, onBack = onBack, onHelp = { help = true },
     onCall = { ctx.contact(route?.driverPhone, "call") }, onMessage = { ctx.contact(route?.driverPhone, "sms") },
-    map = { LiveMap(it, vehicles = listOfNotNull(trail.withHeading()), follow = p != null, highlight = pickup) },
+    map = { LiveMap(it, vehicles = listOfNotNull(trail.withHeading()), follow = p != null, highlight = pickup, me = me, bottomInsetDp = 470) },
   )
 }
 
@@ -523,20 +533,31 @@ private fun DriverRoot(vm: NudgeViewModel, nav: Navigator) {
   var gpsOk by remember { mutableStateOf(true) }
   // GPS sharing follows the trip state (also resumes after the app is reopened mid-trip).
   LaunchedEffect(trip?.id, trip?.started) {
-    gpsOk = TripLocationService.hasPermission(ctx) && ctx.getSystemService(android.location.LocationManager::class.java).isProviderEnabled(android.location.LocationManager.GPS_PROVIDER)
+    gpsOk = locationProblem(ctx) == null
     if (trip?.started == true && TripLocationService.hasPermission(ctx)) TripLocationService.start(ctx, trip.id)
     else if (trip?.started != true) TripLocationService.stop(ctx)
+  }
+  // Location switched off (or permission changed) in Settings while the app was away, or from the quick-settings tile.
+  LifecycleResumeEffect(Unit) { gpsOk = locationProblem(ctx) == null; onPauseOrDispose {} }
+  DisposableEffect(Unit) {
+    val receiver = object : android.content.BroadcastReceiver() {
+      override fun onReceive(c: android.content.Context, i: Intent) { gpsOk = locationProblem(ctx) == null }
+    }
+    androidx.core.content.ContextCompat.registerReceiver(
+      ctx, receiver, android.content.IntentFilter(android.location.LocationManager.PROVIDERS_CHANGED_ACTION), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED,
+    )
+    onDispose { ctx.unregisterReceiver(receiver) }
   }
   // While a trip runs, pick up riders who booked or cancelled meanwhile.
   LaunchedEffect(trip?.id, trip?.started) {
     while (trip?.started == true) { delay(30_000); vm.refreshTrip() }
   }
-  val askLocation = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
-    gpsOk = TripLocationService.hasPermission(ctx)
-    if (trip?.started != true) vm.startTrip() else if (gpsOk) TripLocationService.start(ctx, trip.id)
-  }
+  // Precise location + location switched on before a trip starts, so riders see where the shuttle really is.
+  val withLocation = rememberLocationGate("Riders see the shuttle on the map from your phone's location.", TripLocationService.permissions, skip = "Start anyway")
+  val fixLocation = rememberLocationGate("Riders see the shuttle on the map from your phone's location.", TripLocationService.permissions)
+  fun startTrip() = withLocation { gpsOk = locationProblem(ctx) == null; vm.startTrip() }
   var askBattery by remember { mutableStateOf(false) }
-  if (askBattery) BatteryPrompt { askBattery = false; askLocation.launch(TripLocationService.permissions) }
+  if (askBattery) BatteryPrompt { askBattery = false; startTrip() }
   var blockLogout by remember { mutableStateOf(false) }
   if (blockLogout) ConfirmDialog("Trip still running", "End the trip first, then log out.", "OK", {}, { blockLogout = false }, dismiss = "Close", destructive = false)
   Column(Modifier.fillMaxSize()) {
@@ -559,7 +580,7 @@ private fun DriverRoot(vm: NudgeViewModel, nav: Navigator) {
               if (state.busy) return@DriverPreTripScreen
               // Battery limits kill GPS on many phones: ask (again) on every start until it's allowed.
               if (!ctx.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(ctx.packageName)) askBattery = true
-              else askLocation.launch(TripLocationService.permissions)
+              else startTrip()
             }, onCall = { ctx.contact(it.phone, "call") })
           }
           else -> DriverActiveTripScreen(
@@ -571,10 +592,7 @@ private fun DriverRoot(vm: NudgeViewModel, nav: Navigator) {
             onUndo = { vm.setBoarding(it.id, BoardingStatus.Waiting) },
             busy = state.busy,
             locationWarning = if (gpsOk) null else "Location is off. Riders can't see the shuttle.",
-            onFixLocation = {
-              if (!TripLocationService.hasPermission(ctx)) askLocation.launch(TripLocationService.permissions)
-              else ctx.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
-            },
+            onFixLocation = { fixLocation { gpsOk = true; TripLocationService.start(ctx, trip.id) } },
           )
         }
       }
@@ -711,4 +729,24 @@ private suspend fun devJump(name: String, vm: NudgeViewModel, nav: Navigator) {
     }
     "playback" -> if (login("7000000002")) nav.push(Route.Playback("SH-1", "Route 1", null))
   }
+}
+
+/** Phone's own location while [enabled]: last known fix at once, then GPS/network updates; null until one arrives. */
+@SuppressLint("MissingPermission") // only enabled after the location gate confirmed the permission
+@Composable
+private fun rememberMyLocation(enabled: Boolean): Position? {
+  val ctx = LocalContext.current
+  var me by remember { mutableStateOf<Position?>(null) }
+  DisposableEffect(enabled) {
+    val lm = ctx.getSystemService(android.location.LocationManager::class.java)
+    val listener = android.location.LocationListener { l -> if (!l.hasAccuracy() || l.accuracy < 200f) me = Position(l.latitude, l.longitude, null, l.time) }
+    if (enabled) runCatching {
+      lm.getProviders(true).filter { it == "gps" || it == "network" }.forEach { p ->
+        lm.getLastKnownLocation(p)?.let { if (me == null || it.accuracy < 200f) listener.onLocationChanged(it) }
+        lm.requestLocationUpdates(p, 5_000L, 10f, listener, android.os.Looper.getMainLooper())
+      }
+    }
+    onDispose { lm.removeUpdates(listener) }
+  }
+  return me
 }
