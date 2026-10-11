@@ -30,3 +30,4 @@ supabase/.branches/
 legacy/
 supabase/.env
 tools/.cache/
+nudge-old-history.bundle

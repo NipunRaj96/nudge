@@ -18,7 +18,8 @@ async function directions(points: number[][]): Promise<Leg> {
     method: "POST",
     headers: { Authorization: orsKey, "Content-Type": "application/json" },
     // radiuses -1: snap each stop to the nearest road however far (some pins sit inside campuses).
-    body: JSON.stringify({ coordinates: points, radiuses: points.map(() => -1), instructions: false }),
+    // Keep instructions on: ORS only returns per-stop `segments` (leg time/distance) with them.
+    body: JSON.stringify({ coordinates: points, radiuses: points.map(() => -1) }),
   });
   if (!res.ok) throw new Error(`ORS ${res.status}: ${(await res.text()).slice(0, 200)}`);
   const f = (await res.json()).features[0];
