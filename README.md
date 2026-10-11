@@ -15,7 +15,7 @@ changes.
 - Phone number login with OTP
 - Monthly passes, ride packs and one-way tickets, paid by UPI
 - Seat booking for morning and evening shifts within a configurable booking window
-- Live shuttle tracking on road-following route lines, with road-based arrival estimates
+- Live shuttle position on the map, with road-based arrival estimates for the rider's pickup
 - Boarding pass, ride history and pass balance
 
 ### Drivers
@@ -46,7 +46,9 @@ interface depending on their role. The backend is Supabase.
 - **Road routing** uses OpenRouteService through the `route-shape` Edge
   Function. Road paths and stop-to-stop drive times are computed only when a
   route's stops change and stored in `route_shapes`, so routing API usage
-  does not grow with the number of riders. The API key stays server-side.
+  does not grow with the number of riders. They are used for arrival times
+  only; the map shows just the shuttle and the rider's pickup. The API key
+  stays server-side.
 - **No Google Play Services dependency.** Location uses the platform
   `LocationManager` and maps use MapLibre with OpenFreeMap tiles.
 
@@ -108,9 +110,9 @@ and `nudge.supabaseKey` from `local.properties`.
 3. Configure an SMS gateway: set `SEND_SMS_HOOK_SECRET` and
    `SMS_URL_TEMPLATE`, then deploy the `send-sms` function. Until then,
    Supabase test phone numbers can be used.
-4. Enable road-following routes: set `ORS_API_KEY` (free key from
+4. Enable road-based arrival times: set `ORS_API_KEY` (free key from
    openrouteservice.org) and deploy the `route-shape` function. Without it,
-   route lines are drawn straight between stops.
+   arrival times use straight-line distance.
 5. Set the production URL and publishable key in `local.properties` and build
    a signed release.
 
