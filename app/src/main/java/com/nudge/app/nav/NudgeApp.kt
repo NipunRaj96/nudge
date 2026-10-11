@@ -256,6 +256,8 @@ fun NudgeApp(devStart: String? = null, vm: NudgeViewModel = viewModel()) {
             onDelete = { vm.deleteRoute(draft.id) { vm.closeDraft(); nav.pop() } },
             onPickOnMap = { evening, index -> pickerTarget = evening to index; nav.push(Route.MapPicker) },
             onBack = { if (state.routeDraftDirty) discardDraft = true else { vm.closeDraft(); nav.pop() } },
+            onLoadDays = { cb -> vm.routeDays(draft, cb) },
+            onSetDayDriver = { d, id, done -> vm.setTripDriver(draft.id, d.date, d.evening, id, done) },
           )
         } ?: LaunchedEffect(Unit) { nav.pop() }
         Route.MapPicker -> {
@@ -417,7 +419,9 @@ private fun PassengerRoot(vm: NudgeViewModel, nav: Navigator, soon: (String) -> 
   val activeRoutes = state.routes.filter { it.active && (it.morning.size >= 2 || it.evening.size >= 2) }
   val window = state.catalog.rules.bookingWindowDays.coerceIn(1, 14)
   val today = LocalDate.now(IST)
-  val days = remember(window, today) { (0..window).map { today.plusDays(it.toLong()) } }
+  val rules = state.catalog.rules
+  // Only days the shuttle runs (Rules); the fallback keeps the screen working if none fall inside the window.
+  val days = remember(window, today, rules) { (0..window).map { today.plusDays(it.toLong()) }.filter(rules::runsOn).ifEmpty { listOf(today) } }
   val dates = remember(days) { days.map { DateOption(it.dayOfWeek.getDisplayName(TextStyle.SHORT, Locale.ENGLISH).uppercase(), it.dayOfMonth.toString(), it.month.getDisplayName(TextStyle.SHORT, Locale.ENGLISH).uppercase()) } }
   val dateIdx = draft.dateIdx.coerceIn(0, days.lastIndex)
   val date = days[dateIdx]

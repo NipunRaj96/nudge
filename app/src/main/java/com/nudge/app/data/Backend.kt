@@ -218,6 +218,9 @@ class Backend(url: String, key: String, private val prefs: android.content.Share
           it.boardedAt?.let { b -> instant(b).format(timeFmt) }, it.passStatus == "pending", it.planKind == "single")
       },
       currentStopIndex = (t.currentStop ?: 0).coerceAtMost(stops.lastIndex.coerceAtLeast(0)), started = t.status == "live",
+      dayLabel = t.serviceDate?.let { LocalDate.parse(it) }?.takeIf { it != today() }?.let {
+        if (it == today().plusDays(1)) "Tomorrow" else it.format(DateTimeFormatter.ofPattern("EEE, d MMM", Locale.ENGLISH))
+      },
     )
   }
 
@@ -257,7 +260,7 @@ class Backend(url: String, key: String, private val prefs: android.content.Share
     Unit
   }
 
-  suspend fun fleet() = call {
+  suspend fun fleet(rules: Rules) = call {
     val vehicles = db.from("vehicles").select { order("code", Order.ASCENDING) }.decodeList<VehicleRow>()
     val trips = db.from("trips").select(Columns.raw("id,status,shift,route_id,departs_at,vehicle_id,route:routes(name),bookings(count)")) {
       filter { eq("service_date", today().toString()); neq("bookings.status", "cancelled") }
@@ -265,10 +268,14 @@ class Backend(url: String, key: String, private val prefs: android.content.Share
     val now = Instant.now()
     val list = vehicles.map { v ->
       val mine = trips.filter { it.vehicleId == v.id }.sortedBy { it.departsAt }
-      val t = mine.firstOrNull { it.status == "live" } ?: mine.firstOrNull { it.status == "scheduled" } ?: mine.lastOrNull()
-      val late = t?.takeIf { it.status == "scheduled" }?.let { java.time.Duration.between(Instant.parse(it.departsAt), now).toMinutes() } ?: 0
+      fun lateMin(t: FleetTripRow) = java.time.Duration.between(Instant.parse(t.departsAt), now).toMinutes()
+      // A trip not started 2 h after its time didn't run: show the next one instead of "delayed 800 min".
+      val t = mine.firstOrNull { it.status == "live" } ?: mine.firstOrNull { it.status == "scheduled" && lateMin(it) <= 120 }
+        ?: mine.lastOrNull { it.status == "done" }
+      val late = t?.takeIf { it.status == "scheduled" }?.let(::lateMin) ?: 0
       val (state, chip) = when {
         t?.status == "live" -> VehicleState.OnRoute to "ON ROUTE"
+        !rules.runsOn(today()) -> VehicleState.Standby to "NO SERVICE"
         late > 0 -> VehicleState.Delayed to "DELAYED ${late}m"
         t?.status == "done" -> VehicleState.Standby to "DONE"
         else -> VehicleState.Standby to "STANDBY"
@@ -276,9 +283,28 @@ class Backend(url: String, key: String, private val prefs: android.content.Share
       val pos = t?.takeIf { it.status == "live" }?.let { live ->
         db.from("positions").select { filter { eq("trip_id", live.id) }; order("recorded_at", Order.DESCENDING); limit(1) }.decodeList<PositionRow>().firstOrNull()?.toPosition()
       }
-      Vehicle(v.code, t?.route?.name ?: "No trip today", state, chip, t?.id, pos)
+      Vehicle(v.code, t?.route?.name ?: if (rules.runsOn(today())) "No trip today" else "No service today", state, chip, t?.id, pos)
     }
     FleetStats(trips.count { it.status == "live" }, trips.sumOf { it.bookings.firstOrNull()?.count ?: 0 }, vehicles.count { it.active }, vehicles.size) to list
+  }
+
+  /** Drivers per day and shift for [routeId] on [days]; days without a trip yet use the route's usual driver. */
+  suspend fun routeDays(routeId: String, usualDriver: String?, days: List<LocalDate>) = call {
+    val trips = db.from("trips").select(Columns.raw("service_date,shift,driver_id,status")) {
+      filter { eq("route_id", routeId); gte("service_date", days.first().toString()); lte("service_date", days.last().toString()) }
+    }.decodeList<DayTripRow>().associateBy { LocalDate.parse(it.serviceDate) to (it.shift == "evening") }
+    days.flatMap { d ->
+      listOf(false, true).map { ev ->
+        trips[d to ev]?.let { DayDriver(d, ev, it.driverId, it.status != "scheduled") } ?: DayDriver(d, ev, usualDriver, false)
+      }
+    }
+  }
+
+  suspend fun setTripDriver(routeId: String, date: LocalDate, evening: Boolean, driverId: String?) = call {
+    rpc("set_trip_driver", buildJsonObject {
+      put("p_route", routeId); put("p_date", date.toString()); put("p_shift", if (evening) "evening" else "morning"); put("p_driver", driverId)
+    })
+    Unit
   }
 
   suspend fun financeCsv() = call {
@@ -316,7 +342,7 @@ class Backend(url: String, key: String, private val prefs: android.content.Share
   suspend fun setPrimaryUpi(id: String) = call { rpc("set_primary_upi", buildJsonObject { put("p_id", id) }); Unit }
 
   suspend fun saveRules(r: Rules) = call {
-    db.from("settings").update(RulesWrite(r.cancelCutoffMin, r.bookingWindowDays, r.allowPendingBooking, r.supportName.trim(), r.supportPhone.filter(Char::isDigit))) {
+    db.from("settings").update(RulesWrite(r.cancelCutoffMin, r.bookingWindowDays, r.allowPendingBooking, r.supportName.trim(), r.supportPhone.filter(Char::isDigit), r.serviceDays.sorted())) {
       filter { eq("id", 1) }
     }
     Unit
@@ -449,6 +475,8 @@ fun friendlyError(code: String?): String = when (code) {
   "ALREADY_RESOLVED" -> "Someone already handled this payment."
   "FORBIDDEN" -> "You are not allowed to do that."
   "BAD_STATE" -> "The trip changed. Go back and open it again."
+  "NO_SERVICE" -> "The shuttle doesn't run on that day."
+  "NOT_TODAY" -> "This trip can only be started on its day."
   "NOT_FOUND" -> "Not found. It may have been removed."
   "BAD_OTP" -> "Wrong or expired code. Try again."
   "BAD_INPUT" -> "Some details are missing or invalid."
@@ -469,14 +497,16 @@ private fun String.toRole() = when (this) { "driver" -> Role.DRIVER; "admin" -> 
   @SerialName("cancel_cutoff_min") val cancelCutoffMin: Int, @SerialName("booking_window_days") val bookingWindowDays: Int,
   @SerialName("allow_pending_booking") val allowPendingBooking: Boolean, @SerialName("support_name") val supportName: String,
   @SerialName("support_phone") val supportPhone: String,
+  @SerialName("service_days") val serviceDays: List<Int> = listOf(1, 2, 3, 4, 5),
 ) {
-  fun toRules() = Rules(cancelCutoffMin, bookingWindowDays, allowPendingBooking, supportName, supportPhone)
+  fun toRules() = Rules(cancelCutoffMin, bookingWindowDays, allowPendingBooking, supportName, supportPhone, serviceDays.toSet())
 }
 
 @Serializable private data class RulesWrite(
   @SerialName("cancel_cutoff_min") val cancelCutoffMin: Int, @SerialName("booking_window_days") val bookingWindowDays: Int,
   @SerialName("allow_pending_booking") val allowPendingBooking: Boolean, @SerialName("support_name") val supportName: String,
   @SerialName("support_phone") val supportPhone: String,
+  @SerialName("service_days") val serviceDays: List<Int>,
 )
 
 @Serializable private data class TierRow(@SerialName("from_day") val fromDay: Int, @SerialName("to_day") val toDay: Int, val price: Int)
@@ -565,8 +595,13 @@ private fun String.toRole() = when (this) { "driver" -> Role.DRIVER; "admin" -> 
   }
 }
 
+@Serializable private data class DayTripRow(
+  @SerialName("service_date") val serviceDate: String, val shift: String, @SerialName("driver_id") val driverId: String? = null, val status: String,
+)
+
 @Serializable private data class TripRow(
   val id: String? = null, @SerialName("route_id") val routeId: String? = null, val shift: String? = null,
+  @SerialName("service_date") val serviceDate: String? = null,
   @SerialName("departs_at") val departsAt: String? = null, @SerialName("vehicle_id") val vehicleId: String? = null,
   val status: String? = null, @SerialName("current_stop") val currentStop: Int? = null,
 )

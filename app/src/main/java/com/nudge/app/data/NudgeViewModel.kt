@@ -144,7 +144,7 @@ class NudgeViewModel : ViewModel() {
         }
         Role.DRIVER -> _state.update { it.copy(catalog = catalog, trip = backend.driverTrip()) }
         Role.ADMIN -> {
-          _state.update { it.copy(catalog = catalog, payments = backend.payments(), fleet = backend.fleet()) }
+          _state.update { it.copy(catalog = catalog, payments = backend.payments(), fleet = backend.fleet(catalog.rules)) }
           syncShapes()
         }
       }
@@ -270,6 +270,20 @@ class NudgeViewModel : ViewModel() {
   fun removeStaff(phone: String) = once {
     backend.removeStaff(phone)
     _state.update { it.copy(staff = backend.staff(), catalog = backend.catalog()) }
+  }
+
+  /** Next service days in the booking window with who drives [route] on each shift. */
+  fun routeDays(route: RouteInfo, onResult: (List<DayDriver>) -> Unit) = act {
+    val rules = _state.value.catalog.rules
+    val today = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Kolkata"))
+    val days = (0..rules.bookingWindowDays.coerceIn(1, 14)).map { today.plusDays(it.toLong()) }.filter(rules::runsOn)
+    onResult(if (days.isEmpty()) emptyList() else backend.routeDays(route.id, route.driverId, days))
+  }
+
+  fun setTripDriver(routeId: String, date: java.time.LocalDate, evening: Boolean, driverId: String?, onDone: () -> Unit) = once {
+    backend.setTripDriver(routeId, date, evening, driverId)
+    say("Driver changed for ${date.format(java.time.format.DateTimeFormatter.ofPattern("EEE d MMM", java.util.Locale.ENGLISH))}")
+    onDone()
   }
 
   fun loadShuttles() = act { _state.update { it.copy(shuttles = backend.shuttles()) } }

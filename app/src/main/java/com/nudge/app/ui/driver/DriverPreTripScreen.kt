@@ -45,7 +45,7 @@ private val Radius32 = RoundedCornerShape(32.dp)
 fun DriverPreTripScreen(trip: DriverTrip, onStartTrip: () -> Unit, modifier: Modifier = Modifier, onCall: (com.nudge.app.data.TripPassenger) -> Unit = {}) {
   val byStop = trip.stops.map { stop -> stop to trip.passengers.filter { it.stopName == stop.name } }.filter { it.second.isNotEmpty() }
   Column(modifier.fillMaxSize().background(NudgeColors.Background)) {
-    ScreenHeader("Today's trip")
+    ScreenHeader(if (trip.dayLabel == null) "Today's trip" else "Next trip · ${trip.dayLabel}")
     LazyColumn(
       Modifier.weight(1f).fillMaxWidth(),
       contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 24.dp, end = 24.dp, top = 8.dp, bottom = 24.dp),
@@ -96,7 +96,8 @@ fun DriverPreTripScreen(trip: DriverTrip, onStartTrip: () -> Unit, modifier: Mod
       }
     }
     Box(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp)) {
-      PrimaryButton("Start trip", onStartTrip, Modifier.fillMaxWidth(), icon = "arrow_forward")
+      if (trip.dayLabel == null) PrimaryButton("Start trip", onStartTrip, Modifier.fillMaxWidth(), icon = "arrow_forward")
+      else PrimaryButton("Starts ${if (trip.dayLabel == "Tomorrow") "tomorrow" else trip.dayLabel}", {}, Modifier.fillMaxWidth(), enabled = false)
     }
   }
 }

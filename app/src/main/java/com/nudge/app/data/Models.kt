@@ -1,5 +1,6 @@
 package com.nudge.app.data
 
+import java.time.LocalDate
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -29,7 +30,13 @@ data class Plan(
 
 data class UpiAccount(val id: String, val vpa: String, val payee: String, val active: Boolean, val primary: Boolean)
 
-data class Rules(val cancelCutoffMin: Int, val bookingWindowDays: Int, val allowPendingBooking: Boolean, val supportName: String, val supportPhone: String)
+data class Rules(
+  val cancelCutoffMin: Int, val bookingWindowDays: Int, val allowPendingBooking: Boolean, val supportName: String, val supportPhone: String,
+  /** ISO weekdays the shuttle runs (1 = Monday ... 7 = Sunday). */
+  val serviceDays: Set<Int> = setOf(1, 2, 3, 4, 5),
+) {
+  fun runsOn(d: LocalDate) = d.dayOfWeek.value in serviceDays
+}
 
 data class Catalog(val plans: List<Plan>, val upi: List<UpiAccount>, val routes: List<RouteInfo>, val rules: Rules) {
   val oneWay get() = plans.firstOrNull { it.kind == PlanKind.Single && it.active }
@@ -92,7 +99,12 @@ data class TripStop(val id: String, val name: String, val time: String)
 data class DriverTrip(
   val id: String, val routeCode: String, val routeName: String, val departure: String, val shuttleCode: String,
   val stops: List<TripStop>, val passengers: List<TripPassenger>, val currentStopIndex: Int, val started: Boolean,
+  /** null = today; otherwise e.g. "Tomorrow" or "Mon, 12 Oct" (the trip can only be started on its day). */
+  val dayLabel: String? = null,
 )
+
+/** Who drives a route on one day and shift ([driverId] null = nobody); [started] trips can't be changed. */
+data class DayDriver(val date: LocalDate, val evening: Boolean, val driverId: String?, val started: Boolean)
 
 enum class VehicleState { OnRoute, Delayed, Standby }
 data class Vehicle(

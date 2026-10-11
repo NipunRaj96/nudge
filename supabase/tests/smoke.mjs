@@ -35,6 +35,9 @@ const rider = await login("919876543210");
 const fresh = await login("919000000099");
 const driver = await login("917000000001");
 const admin = await login("917000000002");
+// Run every day while testing, so results don't depend on today's weekday (service days are tested at the end).
+const setDays = (days) => call("/rest/v1/settings?id=eq.1", { token: admin, method: "PATCH", body: { service_days: days } });
+assert.ok((await setDays([1, 2, 3, 4, 5, 6, 7])).ok);
 
 // Roles come from staff_invites.
 const me = async (t, phone) => (await call(`/rest/v1/profiles?select=role,name&phone=eq.${phone}`, { token: t })).data;
@@ -107,8 +110,8 @@ assert.ok((await rpc("remove_staff", admin, { p_phone: "9111111111" })).ok);
 
 // Driver: today's trip, manifest, boarding, GPS, end.
 let t0 = (await rpc("driver_next_trip", driver)).data;
-if (!t0.id) {
-  // Late in the day: give the driver a route that departs in an hour (also exercises the route editor RPC).
+if (!t0.id || t0.service_date !== istDate(0)) {
+  // Late in the day (the next trip is another day's): give the driver a route that departs in an hour (also exercises the route editor RPC).
   // After 22:00 IST use an hour ago instead, so both pickups stay before midnight (times must not go backwards).
   const off = new Date(Date.now() + 5.5 * 3600e3).getUTCHours() >= 22 ? -60 : 60;
   const hhmm = (addMin) => new Date(Date.now() + 5.5 * 3600e3 + (addMin - 60 + off) * 60e3).toISOString().slice(11, 16);
@@ -200,11 +203,16 @@ assert.equal(new Date(sTrip.departs_at).toISOString(), new Date(`${tomorrow}T06:
 const cid = (await rpc("copy_route", admin, { p_route: rid, p_name: "Smoke Route 3", p_shift_minutes: 30 })).data;
 assert.deepEqual((await liveStops(cid)).map((s) => s.pickup_time), ["07:20:00", "07:40:00", "07:50:00"]);
 
-// Driver: a live trip from another date is still "next"; next/previous stop is idempotent and clamped.
-assert.ok((await rpc("start_trip", driver, { p_trip: sTrip.id })).ok);
-assert.equal((await rpc("driver_next_trip", driver)).data.id, sTrip.id);
-const cur = async () => (await adminGet(`/rest/v1/trips?select=current_stop&id=eq.${sTrip.id}`))[0].current_stop;
-const adv = (body) => rpc("advance_stop", driver, { p_trip: sTrip.id, ...body });
+// Driver: a trip starts only on its own day; a live trip from another date is still "next"; next/previous stop is
+// idempotent and clamped.
+await fails(rpc("start_trip", driver, { p_trip: sTrip.id }), "NOT_TODAY");
+// Today's trip on this route (assigned for the day), started even though its time has passed: live wins as "next".
+assert.ok((await rpc("set_trip_driver", admin, { p_route: rid, p_date: today, p_shift: "morning", p_driver: georgeId })).ok);
+const tTrip = (await adminGet(`/rest/v1/trips?select=id&route_id=eq.${rid}&service_date=eq.${today}`))[0];
+assert.ok((await rpc("start_trip", driver, { p_trip: tTrip.id })).ok);
+assert.equal((await rpc("driver_next_trip", driver)).data.id, tTrip.id);
+const cur = async () => (await adminGet(`/rest/v1/trips?select=current_stop&id=eq.${tTrip.id}`))[0].current_stop;
+const adv = (body) => rpc("advance_stop", driver, { p_trip: tTrip.id, ...body });
 assert.ok((await adv({ p_from: 0 })).ok);
 assert.ok((await adv({ p_from: 0 })).ok); // retry of the same tap: no double move
 assert.equal(await cur(), 1);
@@ -214,7 +222,7 @@ assert.ok((await adv({ p_step: -1 })).ok);
 assert.equal(await cur(), 0);
 assert.ok((await adv({ p_step: 5 })).ok);
 assert.equal(await cur(), 2);
-assert.ok((await rpc("end_trip", driver, { p_trip: sTrip.id })).ok);
+assert.ok((await rpc("end_trip", driver, { p_trip: tTrip.id })).ok);
 
 // Delete: route with bookings is archived (unbookable), unused copy is really deleted.
 await fails(rpc("delete_route", rider, { p_route: cid }), "FORBIDDEN");
@@ -245,5 +253,28 @@ else {
   assert.equal(sh.way_points.length, route.stops.filter((s) => s.shift === "morning").length);
   assert.equal(sh.leg_seconds.length, sh.way_points.length - 1);
 }
+
+// Service days: no seats and no driver changes on a day the shuttle doesn't run.
+const dayAfter = istDate(2);
+const isoDow = (d) => ((new Date(`${d}T12:00:00Z`).getUTCDay() + 6) % 7) + 1;
+const r1 = (await call("/rest/v1/routes?select=id,driver_id,stops(id,seq,shift)&name=eq.Route%201", { token: admin })).data[0];
+const r1Stop = r1.stops.find((x) => x.shift === "morning" && x.seq === 0).id;
+assert.ok((await setDays([1, 2, 3, 4, 5, 6, 7].filter((d) => d !== isoDow(dayAfter)))).ok);
+await fails(rpc("book_ride", fresh, { p_route: r1.id, p_date: dayAfter, p_shift: "morning", p_stop: r1Stop }), "NO_SERVICE");
+await fails(rpc("set_trip_driver", admin, { p_route: r1.id, p_date: dayAfter, p_shift: "morning", p_driver: null }), "NO_SERVICE");
+assert.ok((await setDays([1, 2, 3, 4, 5, 6, 7])).ok);
+
+// Driver for one day: Marcus drives Route 1 the day after tomorrow, and keeps it when the route is saved again.
+const marcus = (await rpc("staff_list", admin)).data.find((x) => x.phone === "917000000003").id;
+await fails(rpc("set_trip_driver", rider, { p_route: r1.id, p_date: dayAfter, p_shift: "morning", p_driver: marcus }), "FORBIDDEN");
+await fails(rpc("set_trip_driver", admin, { p_route: r1.id, p_date: istDate(-1), p_shift: "morning", p_driver: marcus }), "BAD_INPUT");
+assert.ok((await rpc("set_trip_driver", admin, { p_route: r1.id, p_date: dayAfter, p_shift: "morning", p_driver: marcus })).ok);
+const dayTrip = async () => (await adminGet(`/rest/v1/trips?select=driver_id,driver_override&route_id=eq.${r1.id}&service_date=eq.${dayAfter}&shift=eq.morning`))[0];
+assert.deepEqual(await dayTrip(), { driver_id: marcus, driver_override: true });
+assert.ok((await rpc("save_route", admin, { p_route: { id: r1.id, name: "Route 1", from_label: "Indirapuram", to_label: "Noida Sector 62", driver_id: r1.driver_id } })).ok);
+assert.equal((await dayTrip()).driver_id, marcus);
+// back to the usual driver: no longer an override
+assert.ok((await rpc("set_trip_driver", admin, { p_route: r1.id, p_date: dayAfter, p_shift: "morning", p_driver: r1.driver_id })).ok);
+assert.deepEqual(await dayTrip(), { driver_id: r1.driver_id, driver_override: false });
 
 console.log("smoke OK");

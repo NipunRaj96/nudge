@@ -3,6 +3,7 @@ package com.nudge.app.ui.admin
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -48,6 +49,7 @@ import com.nudge.app.data.Plan
 import com.nudge.app.data.PlanKind
 import com.nudge.app.data.Position
 import com.nudge.app.data.PriceTier
+import com.nudge.app.data.DayDriver
 import com.nudge.app.data.Role
 import com.nudge.app.data.RouteInfo
 import com.nudge.app.data.Rules
@@ -271,7 +273,9 @@ fun RulesScreen(rules: Rules, onSave: (Rules, () -> Unit) -> Unit, onBack: () ->
   var pending by rememberSaveable { mutableStateOf(rules.allowPendingBooking) }
   var supportName by rememberSaveable { mutableStateOf(rules.supportName) }
   var supportPhone by rememberSaveable { mutableStateOf(rules.supportPhone.takeLast(10)) }
+  var days by rememberSaveable { mutableStateOf(rules.serviceDays.sorted()) }
   val problem = when {
+    days.isEmpty() -> "Pick at least one day the shuttle runs."
     (window.toIntOrNull() ?: 0) !in 1..14 -> "Booking window must be 1 to 14 days."
     cutoff.toIntOrNull() == null -> "Enter the cancel time in minutes (0 = until pickup)."
     supportPhone.length != 10 -> "Enter the 10-digit phone riders call for help."
@@ -281,6 +285,19 @@ fun RulesScreen(rules: Rules, onSave: (Rules, () -> Unit) -> Unit, onBack: () ->
   Column(Modifier.fillMaxSize().background(NudgeColors.Background).imePadding()) {
     ScreenHeader("Rules & support", onBack = onBack)
     Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+      SectionLabel("Shuttle runs on")
+      Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        listOf("M", "T", "W", "T", "F", "S", "S").forEachIndexed { i, label ->
+          val d = i + 1
+          val on = d in days
+          Box(
+            Modifier.weight(1f).aspectRatio(1f).clip(CircleShape).background(if (on) NudgeColors.PrimaryContainer else NudgeColors.SurfaceContainer)
+              .tappable(pressedScale = 0.95f) { days = if (on) days - d else (days + d).sorted() },
+            contentAlignment = Alignment.Center,
+          ) { Text(label, style = twText(14f, FontWeight.SemiBold, 20.sp), color = if (on) NudgeColors.OnPrimaryContainer else NudgeColors.OnSurfaceVariant) }
+        }
+      }
+      Hint("Riders can't book, and drivers get no trip, on the other days.")
       SectionLabel("Booking")
       FormField("Riders can book up to (days ahead)", window, { window = it.digits().take(2) }, keyboard = KeyboardType.Number)
       FormField("Cancel allowed until (minutes before pickup)", cutoff, { cutoff = it.digits().take(3) }, keyboard = KeyboardType.Number)
@@ -292,7 +309,7 @@ fun RulesScreen(rules: Rules, onSave: (Rules, () -> Unit) -> Unit, onBack: () ->
       if (problem != null) Text(problem, style = NudgeType.BodySm, color = Color(0xFFFCD34D), modifier = Modifier.padding(horizontal = 8.dp))
     }
     PrimaryButton("Save", {
-      onSave(Rules(cutoff.toInt(), window.toInt(), pending, supportName.trim(), "91$supportPhone")) {}
+      onSave(Rules(cutoff.toInt(), window.toInt(), pending, supportName.trim(), "91$supportPhone", days.toSet())) {}
     }, Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.navigationBars).padding(horizontal = 24.dp, vertical = 16.dp), enabled = valid)
   }
 }
@@ -311,8 +328,10 @@ fun RouteEditorScreen(
   route: RouteInfo, shuttles: List<Shuttle>, drivers: List<StaffMember>, notes: List<String>, busy: Boolean, onLoad: () -> Unit,
   onChange: ((RouteInfo) -> RouteInfo) -> Unit, onSave: () -> Unit, onDelete: () -> Unit,
   onPickOnMap: (evening: Boolean, index: Int) -> Unit, onBack: () -> Unit,
+  onLoadDays: ((List<DayDriver>) -> Unit) -> Unit = {}, onSetDayDriver: (DayDriver, String?, () -> Unit) -> Unit = { _, _, _ -> },
 ) {
   LaunchedEffect(Unit) { onLoad() }
+  var dayDrivers by remember { mutableStateOf(false) }
   var shift by remember { mutableStateOf(lastEditorShift) }
   LaunchedEffect(shift) { lastEditorShift = shift }
   val evening = shift == 1
@@ -320,6 +339,7 @@ fun RouteEditorScreen(
   fun setStops(list: List<Stop>) = onChange { r -> if (evening) r.copy(evening = list) else r.copy(morning = list) }
   var editing by remember { mutableStateOf<Pair<Int, Stop>?>(null) } // index (== size for a new stop), stop
   var deleting by remember { mutableStateOf(false) }
+  if (dayDrivers) DayDriversSheet(drivers.filter { it.role == Role.DRIVER && it.id != null }, onLoadDays, onSetDayDriver) { dayDrivers = false }
   val unpinned = (route.morning + route.evening).count { it.lat == 0.0 && it.lng == 0.0 }
   val problem = when {
     route.name.isBlank() -> "Give the route a name."
@@ -358,6 +378,9 @@ fun RouteEditorScreen(
         val joined = drivers.filter { it.role == Role.DRIVER && it.id != null }
         if (joined.isEmpty()) Hint("No drivers have logged in yet. Add them in Profile → Drivers & staff; they appear here after their first login.")
         else ChoiceChips(listOf<Pair<String?, String>>(null to "None") + joined.map { it.id to it.name }, route.driverId) { v -> onChange { it.copy(driverId = v) } }
+      }
+      if (route.id.isNotBlank()) item {
+        ListCard("Different driver on some days", "Change who drives on a particular day (leave, swap, cover).", leadingIcon = "person", onClick = { dayDrivers = true })
       }
       item { ToggleRow("Route is running", "Riders can only book running routes.", route.active) { v -> onChange { it.copy(active = v) } } }
       item { SectionLabel("Stops & pickup times") }
@@ -604,5 +627,65 @@ fun MapPickerScreen(start: Stop, onPicked: (Double, Double) -> Unit, onBack: () 
       Text("%.5f, %.5f".format(lat, lng), style = twText(14f, FontWeight.SemiBold, 20.sp), color = NudgeColors.OnSurface)
       PrimaryButton("Use this location", { onPicked(lat, lng) }, Modifier.fillMaxWidth())
     }
+  }
+}
+
+/**
+ * Next service days in the booking window, morning and evening, with who drives; tap one to pick another driver for
+ * that day only. The route's usual driver stays as it is.
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun DayDriversSheet(
+  drivers: List<StaffMember>, load: ((List<DayDriver>) -> Unit) -> Unit, onSet: (DayDriver, String?, () -> Unit) -> Unit, onDismiss: () -> Unit,
+) {
+  var days by remember { mutableStateOf<List<DayDriver>?>(null) }
+  var picking by remember { mutableStateOf<DayDriver?>(null) }
+  LaunchedEffect(Unit) { load { days = it } }
+  val fmt = remember { java.time.format.DateTimeFormatter.ofPattern("EEE, d MMM", java.util.Locale.ENGLISH) }
+  fun name(id: String?) = drivers.firstOrNull { it.id == id }?.name ?: if (id == null) "No driver" else "Removed driver"
+  androidx.compose.material3.ModalBottomSheet(onDismissRequest = onDismiss, containerColor = NudgeColors.SurfaceContainerLow) {
+    LazyColumn(Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+      item { Text("Driver by day", style = NudgeType.HeadlineMd, color = NudgeColors.OnSurface) }
+      item { Hint("Tap a shift to give it to another driver for that day only. Started trips can't be changed.") }
+      val list = days
+      if (list == null) item { Text("Loading…", style = NudgeType.BodySm, color = NudgeColors.OnSurfaceVariant) }
+      else if (list.isEmpty()) item { Hint("No service days in the booking window.") }
+      else list.groupBy { it.date }.forEach { (date, shifts) ->
+        item(key = date.toString()) {
+          Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(date.format(fmt), style = twText(14f, FontWeight.SemiBold, 20.sp), color = NudgeColors.OnSurface)
+            shifts.forEach { d ->
+              ListCard(
+                "${if (d.evening) "Evening" else "Morning"} · ${name(d.driverId)}", if (d.started) "Trip already started" else null,
+                onClick = if (d.started) null else ({ picking = d }),
+              )
+            }
+          }
+        }
+      }
+    }
+  }
+  picking?.let { d ->
+    androidx.compose.material3.AlertDialog(
+      onDismissRequest = { picking = null },
+      containerColor = NudgeColors.SurfaceContainerHigh,
+      title = { Text("${d.date.format(fmt)} · ${if (d.evening) "evening" else "morning"}", style = NudgeType.HeadlineMd, color = NudgeColors.OnSurface) },
+      text = {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+          (listOf<Pair<String?, String>>(null to "No driver") + drivers.map { it.id to it.name }).forEach { (id, label) ->
+            Text(
+              (if (id == d.driverId) "✓  " else "     ") + label, style = twText(16f, FontWeight.Medium, 24.sp),
+              color = if (id == d.driverId) NudgeColors.Primary else NudgeColors.OnSurface,
+              modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).tappable {
+                picking = null
+                if (id != d.driverId) onSet(d, id) { load { days = it } }
+              }.padding(horizontal = 8.dp, vertical = 12.dp),
+            )
+          }
+        }
+      },
+      confirmButton = { androidx.compose.material3.TextButton({ picking = null }) { Text("Close", color = NudgeColors.Primary) } },
+    )
   }
 }
